@@ -13,6 +13,7 @@ namespace Symfony\Component\Messenger;
 
 /**
  * An envelope item related to a message.
+ * @see TransportableEnvelopeItemInterface for an envelope item that could be transported.
  *
  * @author Maxime Steinhausser <maxime.steinhausser@gmail.com>
  *
@@ -20,8 +21,4 @@ namespace Symfony\Component\Messenger;
  */
 interface EnvelopeItemInterface
 {
-    /**
-     * @return bool True if this item can be transported. Otherwise, it'll be ignored during send.
-     */
-    public function isTransportable(): bool;
 }
