@@ -11,12 +11,14 @@
 
 namespace Symfony\Component\Yaml\Command;
 
+use Symfony\Component\Console\CI\GithubAnnotationsReporter;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Exception\InvalidArgumentException;
 use Symfony\Component\Console\Exception\RuntimeException;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\BufferedOutput;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Symfony\Component\Yaml\Exception\ParseException;
@@ -55,7 +57,7 @@ class LintCommand extends Command
         $this
             ->setDescription('Lints a file and outputs encountered errors')
             ->addArgument('filename', InputArgument::IS_ARRAY, 'A file, a directory or "-" for reading from STDIN')
-            ->addOption('format', null, InputOption::VALUE_REQUIRED, 'The output format', 'txt')
+            ->addOption('format', null, InputOption::VALUE_REQUIRED, 'The output format')
             ->addOption('parse-tags', null, InputOption::VALUE_NONE, 'Parse custom tags')
             ->setHelp(<<<EOF
 The <info>%command.name%</info> command lints a YAML file and outputs to STDOUT
@@ -84,6 +86,12 @@ EOF
         $io = new SymfonyStyle($input, $output);
         $filenames = (array) $input->getArgument('filename');
         $this->format = $input->getOption('format');
+
+        if (null === $this->format) {
+            // Autodetect format according to CI environment
+            $this->format = GithubAnnotationsReporter::isGithubActionEnvironment() ? 'github' : 'txt';
+        }
+
         $this->displayCorrectFiles = $output->isVerbose();
         $flags = $input->getOption('parse-tags') ? Yaml::PARSE_CUSTOM_TAGS : 0;
 
@@ -137,16 +145,23 @@ EOF
                 return $this->displayTxt($io, $files);
             case 'json':
                 return $this->displayJson($io, $files);
+            case 'github':
+                return $this->displayTxt($io, $files, true);
             default:
                 throw new InvalidArgumentException(sprintf('The format "%s" is not supported.', $this->format));
         }
     }
 
-    private function displayTxt(SymfonyStyle $io, array $filesInfo): int
+    private function displayTxt(SymfonyStyle $io, array $filesInfo, bool $errorAsGithubAnnotations = false): int
     {
         $countFiles = \count($filesInfo);
         $erroredFiles = 0;
         $suggestTagOption = false;
+
+        if ($errorAsGithubAnnotations) {
+            $githubErrorsReporter = new GithubAnnotationsReporter($buffer = new BufferedOutput());
+            $githubReporter = new GithubAnnotationsReporter($io);
+        }
 
         foreach ($filesInfo as $info) {
             if ($info['valid'] && $this->displayCorrectFiles) {
@@ -159,13 +174,24 @@ EOF
                 if (false !== strpos($info['message'], 'PARSE_CUSTOM_TAGS')) {
                     $suggestTagOption = true;
                 }
+
+                if ($errorAsGithubAnnotations) {
+                    $githubErrorsReporter->error($info['message'], $info['file'], $info['line']);
+                }
             }
         }
 
         if (0 === $erroredFiles) {
             $io->success(sprintf('All %d YAML files contain valid syntax.', $countFiles));
         } else {
-            $io->warning(sprintf('%d YAML files have valid syntax and %d contain errors.%s', $countFiles - $erroredFiles, $erroredFiles, $suggestTagOption ? ' Use the --parse-tags option if you want parse custom tags.' : ''));
+            $message = sprintf('%d YAML files have valid syntax and %d contain errors.%s', $countFiles - $erroredFiles, $erroredFiles, $suggestTagOption ? ' Use the --parse-tags option if you want parse custom tags.' : '');
+
+            if ($errorAsGithubAnnotations) {
+                $githubReporter->warning($message);
+                $io->write($buffer->fetch());
+            } else {
+                $io->warning($message);
+            }
         }
 
         return min($erroredFiles, 1);
